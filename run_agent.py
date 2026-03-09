@@ -1410,7 +1410,7 @@ class AIAgent:
         from hermes_time import now as _hermes_now
         now = _hermes_now()
         timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
-        if self.session_id:
+        if self.session_id and os.getenv("HERMES_PASS_SESSION_ID"):
             timestamp_line += f"\nSession ID: {self.session_id}"
         prompt_parts.append(timestamp_line)
 

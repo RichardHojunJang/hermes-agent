@@ -203,6 +203,10 @@ def cmd_chat(args):
     except Exception:
         pass
 
+    # --pass-session-id: include session ID in the agent's system prompt
+    if getattr(args, "pass_session_id", False):
+        os.environ["HERMES_PASS_SESSION_ID"] = "1"
+
     # Import and run the CLI
     from cli import main as cli_main
     
@@ -1303,6 +1307,12 @@ For more help on a command:
         default=False,
         help="Run in an isolated git worktree (for parallel agents)"
     )
+    parser.add_argument(
+        "--pass-session-id",
+        action="store_true",
+        default=False,
+        help="Include the session ID in the agent's system prompt"
+    )
     
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
     
@@ -1356,6 +1366,12 @@ For more help on a command:
         action="store_true",
         default=False,
         help="Run in an isolated git worktree (for parallel agents on the same repo)"
+    )
+    chat_parser.add_argument(
+        "--pass-session-id",
+        action="store_true",
+        default=False,
+        help="Include the session ID in the agent's system prompt"
     )
     chat_parser.set_defaults(func=cmd_chat)
 
