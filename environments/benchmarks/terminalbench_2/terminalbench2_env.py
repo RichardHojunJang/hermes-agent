@@ -118,6 +118,14 @@ class TerminalBench2EvalConfig(HermesAgentEnvConfig):
         "Tasks exceeding this are scored as FAIL. Default 30 minutes.",
     )
 
+    # --- Eval concurrency ---
+    eval_concurrency: int = Field(
+        default=0,
+        description="Maximum number of tasks to evaluate in parallel. "
+        "0 means unlimited (all tasks run concurrently). "
+        "Set to 8 for local backends to avoid overwhelming the machine.",
+    )
+
 
 # Tasks that cannot run properly on Modal and are excluded from scoring.
 MODAL_INCOMPATIBLE_TASKS = {
@@ -429,8 +437,13 @@ class TerminalBench2EvalEnv(HermesAgentBaseEnv):
                     "error": "no_image",
                 }
 
-            # --- 2. Register per-task Modal image override ---
-            register_task_env_overrides(task_id, {"modal_image": modal_image})
+            # --- 2. Register per-task image override ---
+            # Set both modal_image and docker_image so the task image is used
+            # regardless of which backend is configured.
+            register_task_env_overrides(task_id, {
+                "modal_image": modal_image,
+                "docker_image": modal_image,
+            })
             logger.info(
                 "Task %s: registered image override for task_id %s",
                 task_name, task_id[:8],
@@ -655,13 +668,19 @@ class TerminalBench2EvalEnv(HermesAgentBaseEnv):
 
     async def _eval_with_timeout(self, item: Dict[str, Any]) -> Dict:
         """
-        Wrap rollout_and_score_eval with a per-task wall-clock timeout.
+        Wrap rollout_and_score_eval with a per-task wall-clock timeout
+        and optional concurrency limit via semaphore.
 
         If the task exceeds task_timeout seconds, it's automatically scored
         as FAIL. This prevents any single task from hanging indefinitely.
         """
         task_name = item.get("task_name", "unknown")
         category = item.get("category", "unknown")
+
+        # Acquire concurrency semaphore if configured
+        if self._eval_semaphore:
+            await self._eval_semaphore.acquire()
+
         try:
             return await asyncio.wait_for(
                 self.rollout_and_score_eval(item),
@@ -679,6 +698,9 @@ class TerminalBench2EvalEnv(HermesAgentBaseEnv):
             }
             self._save_result(out)
             return out
+        finally:
+            if self._eval_semaphore:
+                self._eval_semaphore.release()
 
     async def evaluate(self, *args, **kwargs) -> None:
         """
@@ -695,6 +717,13 @@ class TerminalBench2EvalEnv(HermesAgentBaseEnv):
         bar stays visible.
         """
         start_time = time.time()
+
+        # Set up concurrency limit if configured
+        if self.config.eval_concurrency > 0:
+            self._eval_semaphore = asyncio.Semaphore(self.config.eval_concurrency)
+            print(f"  Eval concurrency: {self.config.eval_concurrency} tasks at a time")
+        else:
+            self._eval_semaphore = None
 
         # Route all logging through tqdm.write() so the progress bar stays
         # pinned at the bottom while log lines scroll above it.
