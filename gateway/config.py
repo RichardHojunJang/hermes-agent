@@ -66,6 +66,7 @@ class Platform(Enum):
     WEBHOOK = "webhook"
     FEISHU = "feishu"
     WECOM = "wecom"
+    ZALO = "zalo"
 
 
 @dataclass
@@ -288,6 +289,8 @@ class GatewayConfig:
                 connected.append(platform)
             # WeCom uses extra dict for bot credentials
             elif platform == Platform.WECOM and config.extra.get("bot_id"):
+                connected.append(platform)
+            elif platform == Platform.ZALO and config.token:
                 connected.append(platform)
         return connected
     
@@ -893,6 +896,21 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                 chat_id=wecom_home,
                 name=os.getenv("WECOM_HOME_CHANNEL_NAME", "Home"),
             )
+
+    # Zalo Bot Platform (https://bot.zapps.me/docs/ — not Zalo OA)
+    zalo_token = os.getenv("ZALO_BOT_TOKEN")
+    if zalo_token:
+        if Platform.ZALO not in config.platforms:
+            config.platforms[Platform.ZALO] = PlatformConfig()
+        config.platforms[Platform.ZALO].enabled = True
+        config.platforms[Platform.ZALO].token = zalo_token
+    zalo_home = os.getenv("ZALO_HOME_CHANNEL")
+    if zalo_home and Platform.ZALO in config.platforms:
+        config.platforms[Platform.ZALO].home_channel = HomeChannel(
+            platform=Platform.ZALO,
+            chat_id=zalo_home,
+            name=os.getenv("ZALO_HOME_CHANNEL_NAME", "Home"),
+        )
 
     # Session settings
     idle_minutes = os.getenv("SESSION_IDLE_MINUTES")

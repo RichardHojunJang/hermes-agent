@@ -42,7 +42,7 @@ SEND_MESSAGE_SCHEMA = {
             },
             "target": {
                 "type": "string",
-                "description": "Delivery target. Format: 'platform' (uses home channel), 'platform:#channel-name', 'platform:chat_id', or Telegram topic 'telegram:chat_id:thread_id'. Examples: 'telegram', 'telegram:-1001234567890:17585', 'discord:#bot-home', 'slack:#engineering', 'signal:+15551234567'"
+                "description": "Delivery target. Format: 'platform' (uses home channel), 'platform:#channel-name', 'platform:chat_id', or Telegram topic 'telegram:chat_id:thread_id'. Examples: 'telegram', 'telegram:-1001234567890:17585', 'discord:#bot-home', 'slack:#engineering', 'signal:+15551234567', 'zalo:zalo_chat_id'"
             },
             "message": {
                 "type": "string",
@@ -131,6 +131,7 @@ def _handle_send(args):
         "dingtalk": Platform.DINGTALK,
         "feishu": Platform.FEISHU,
         "wecom": Platform.WECOM,
+        "zalo": Platform.ZALO,
         "email": Platform.EMAIL,
         "sms": Platform.SMS,
     }
@@ -304,6 +305,11 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     }
     if _feishu_available:
         _MAX_LENGTHS[Platform.FEISHU] = FeishuAdapter.MAX_MESSAGE_LENGTH
+    try:
+        from gateway.platforms.zalo import ZaloBotAdapter
+        _MAX_LENGTHS[Platform.ZALO] = ZaloBotAdapter.MAX_MESSAGE_LENGTH
+    except ImportError:
+        _MAX_LENGTHS[Platform.ZALO] = 2000
 
     # Smart-chunk the message to fit within platform limits.
     # For short messages or platforms without a known limit this is a no-op.
@@ -371,6 +377,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             result = await _send_feishu(pconfig, chat_id, chunk, thread_id=thread_id)
         elif platform == Platform.WECOM:
             result = await _send_wecom(pconfig.extra, chat_id, chunk)
+        elif platform == Platform.ZALO:
+            result = await _send_zalo(pconfig.token, chat_id, chunk)
         else:
             result = {"error": f"Direct sending not yet implemented for {platform.value}"}
 
@@ -795,6 +803,34 @@ async def _send_dingtalk(extra, chat_id, message):
         return {"success": True, "platform": "dingtalk", "chat_id": chat_id}
     except Exception as e:
         return {"error": f"DingTalk send failed: {e}"}
+
+
+
+
+async def _send_zalo(token: str, chat_id: str, message: str):
+    """Send via Zalo Bot API sendMessage (one-shot for cron/send_message tool)."""
+    try:
+        import httpx
+    except ImportError:
+        return {"error": "httpx not installed"}
+    if not token:
+        return {"error": "ZALO_BOT_TOKEN not configured for zalo platform"}
+    token = token.strip()
+    if not token:
+        return {"error": "Zalo bot token is empty"}
+    url = f"https://bot-api.zaloplatforms.com/bot{token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json={"chat_id": str(chat_id), "text": message})
+            try:
+                data = resp.json()
+            except Exception:
+                return {"error": f"Invalid JSON from Zalo API (HTTP {resp.status_code})"}
+            if not data.get("ok"):
+                return {"error": str(data.get("description") or data.get("error_code") or resp.text)[:500]}
+        return {"success": True, "platform": "zalo", "chat_id": chat_id}
+    except Exception as e:
+        return {"error": f"Zalo send failed: {e}"}
 
 
 async def _send_wecom(extra, chat_id, message):

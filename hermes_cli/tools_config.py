@@ -143,6 +143,7 @@ PLATFORMS = {
  "dingtalk": {"label": "💬 DingTalk", "default_toolset": "hermes-dingtalk"},
     "feishu": {"label": "🪽 Feishu", "default_toolset": "hermes-feishu"},
     "wecom": {"label": "💬 WeCom", "default_toolset": "hermes-wecom"},
+    "zalo": {"label": "💬 Zalo Bot", "default_toolset": "hermes-zalo"},
     "api_server": {"label": "🌐 API Server", "default_toolset": "hermes-api-server"},
     "mattermost": {"label": "💬 Mattermost", "default_toolset": "hermes-mattermost"},
 }
