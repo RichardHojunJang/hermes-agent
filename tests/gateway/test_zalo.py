@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from gateway.config import PlatformConfig
+from gateway.platforms.base import MessageType
 
 
 class TestZaloRequirements:
@@ -44,6 +45,55 @@ class TestZaloAdapterInit:
 
         ad = ZaloBotAdapter(PlatformConfig(enabled=True))
         assert ad._token == "envtok"
+
+    def test_webhook_mode_reads_extra(self):
+        from gateway.platforms.zalo import ZaloBotAdapter
+
+        cfg = PlatformConfig(
+            enabled=True,
+            token="t",
+            extra={
+                "connection_mode": "webhook",
+                "webhook_public_url": "https://example.com/hook",
+                "webhook_secret": "12345678",
+                "webhook_port": 9001,
+            },
+        )
+        ad = ZaloBotAdapter(cfg)
+        assert ad._connection_mode == "webhook"
+        assert ad._webhook_public_url == "https://example.com/hook"
+        assert ad._webhook_secret == "12345678"
+        assert ad._webhook_port == 9001
+        assert ad._webhook_path == "/hook"
+
+
+class TestParseWebhookPath:
+    def test_uses_path_from_public_url(self):
+        from gateway.platforms.zalo import _parse_webhook_path
+
+        assert _parse_webhook_path("https://ex.com/api/zalo", None) == "/api/zalo"
+
+    def test_default_path_when_root_url(self):
+        from gateway.platforms.zalo import _parse_webhook_path
+
+        assert _parse_webhook_path("https://ex.com", None) == "/zalo/webhook"
+
+    def test_path_override(self):
+        from gateway.platforms.zalo import _parse_webhook_path
+
+        assert _parse_webhook_path("https://ex.com", "/custom") == "/custom"
+
+
+class TestPollBackoff:
+    def test_backoff_in_expected_range(self):
+        from gateway.platforms.zalo import ZaloBotAdapter, _POLL_BACKOFF_SEC
+
+        ad = ZaloBotAdapter(PlatformConfig(enabled=True, token="t"))
+        for idx in range(len(_POLL_BACKOFF_SEC) + 2):
+            delay = ad._poll_backoff_sleep(idx)
+            cap = _POLL_BACKOFF_SEC[min(idx, len(_POLL_BACKOFF_SEC) - 1)]
+            assert delay >= cap
+            assert delay <= cap * 1.26
 
 
 class TestZaloDispatch:
@@ -101,6 +151,70 @@ class TestZaloDispatch:
         await asyncio.sleep(0.05)
         assert seen == []
 
+    @pytest.mark.asyncio
+    async def test_dispatches_image_message(self, monkeypatch):
+        from gateway.platforms.zalo import ZaloBotAdapter
+
+        async def fake_cache(url: str, ext: str = ".jpg"):
+            assert url.startswith("https://")
+            return "/cached/img.jpg"
+
+        monkeypatch.setattr("gateway.platforms.zalo.cache_image_from_url", fake_cache)
+
+        ad = ZaloBotAdapter(PlatformConfig(enabled=True, token="t"))
+        seen = []
+
+        async def capture(ev):
+            seen.append(ev)
+            return None
+
+        ad.set_message_handler(capture)
+        item = {
+            "event_name": "message.image.received",
+            "message": {
+                "message_id": "img1",
+                "photo": "https://cdn.example/photo.jpg",
+                "caption": "hi",
+                "from": {"id": "u1", "display_name": "U1", "is_bot": False},
+                "chat": {"id": "c1", "chat_type": "PRIVATE"},
+                "date": 1_700_000_000_000,
+            },
+        }
+        await ad._dispatch_update(item)
+        await asyncio.sleep(0.05)
+        assert len(seen) == 1
+        assert seen[0].message_type == MessageType.PHOTO
+        assert "hi" in seen[0].text
+        assert seen[0].media_urls == ["/cached/img.jpg"]
+
+    @pytest.mark.asyncio
+    async def test_dispatches_sticker_message(self, monkeypatch):
+        from gateway.platforms.zalo import ZaloBotAdapter
+
+        ad = ZaloBotAdapter(PlatformConfig(enabled=True, token="t"))
+        seen = []
+
+        async def capture(ev):
+            seen.append(ev)
+            return None
+
+        ad.set_message_handler(capture)
+        item = {
+            "event_name": "message.sticker.received",
+            "message": {
+                "message_id": "st1",
+                "sticker": "sticker-id-xyz",
+                "from": {"id": "u1", "display_name": "U1", "is_bot": False},
+                "chat": {"id": "c1"},
+                "date": 1_700_000_000_000,
+            },
+        }
+        await ad._dispatch_update(item)
+        await asyncio.sleep(0.05)
+        assert len(seen) == 1
+        assert seen[0].message_type == MessageType.STICKER
+        assert "sticker-id-xyz" in seen[0].text
+
 
 class TestSendMessageZaloRouting:
     @pytest.mark.asyncio
@@ -130,3 +244,34 @@ class TestSendMessageZaloRouting:
         out = await sm._send_zalo("tok", "chat1", "hi")
         assert out["success"] is True
         assert out["platform"] == "zalo"
+
+
+class TestZaloSendPhoto:
+    @pytest.mark.asyncio
+    async def test_send_image_posts_sendphoto(self, monkeypatch):
+        from gateway.platforms.zalo import ZaloBotAdapter
+
+        class FakeResp:
+            def json(self):
+                return {"ok": True, "result": {"message_id": "p1"}}
+
+        posts = []
+
+        class FakeClient:
+            async def post(self, url, json=None):
+                posts.append((url, json))
+                return FakeResp()
+
+            async def aclose(self):
+                pass
+
+        ad = ZaloBotAdapter(PlatformConfig(enabled=True, token="tok"))
+        ad._http_client = FakeClient()  # type: ignore[assignment]
+
+        r = await ad.send_image("c1", "https://img.example/x.png", caption="cap")
+        assert r.success
+        assert any("sendPhoto" in u for u, _ in posts)
+        payload = next(j for u, j in posts if "sendPhoto" in u)
+        assert payload["chat_id"] == "c1"
+        assert payload["photo"] == "https://img.example/x.png"
+        assert payload["caption"] == "cap"

@@ -1545,7 +1545,10 @@ class GatewayRunner:
         elif platform == Platform.ZALO:
             from gateway.platforms.zalo import ZaloBotAdapter, check_zalo_requirements
             if not check_zalo_requirements():
-                logger.warning("Zalo Bot: httpx not installed or ZALO_BOT_TOKEN not set")
+                logger.warning(
+                    "Zalo Bot: httpx not installed or ZALO_BOT_TOKEN not set; "
+                    "webhook mode also needs aiohttp + ZALO_WEBHOOK_PUBLIC_URL + ZALO_WEBHOOK_SECRET"
+                )
                 return None
             return ZaloBotAdapter(config)
 

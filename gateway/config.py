@@ -912,6 +912,32 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
             name=os.getenv("ZALO_HOME_CHANNEL_NAME", "Home"),
         )
 
+    # Zalo Bot: polling vs webhook (extra keys; see website docs)
+    if Platform.ZALO in config.platforms:
+        zc = config.platforms[Platform.ZALO]
+        zextra = zc.extra
+        zcm = os.getenv("ZALO_CONNECTION_MODE", "").strip().lower()
+        if zcm in ("polling", "webhook"):
+            zextra["connection_mode"] = zcm
+        zpu = os.getenv("ZALO_WEBHOOK_PUBLIC_URL", "").strip()
+        if zpu:
+            zextra["webhook_public_url"] = zpu
+        zsec = os.getenv("ZALO_WEBHOOK_SECRET", "").strip()
+        if zsec:
+            zextra["webhook_secret"] = zsec
+        zwh = os.getenv("ZALO_WEBHOOK_HOST", "").strip()
+        if zwh:
+            zextra["webhook_host"] = zwh
+        zwp = os.getenv("ZALO_WEBHOOK_PORT", "").strip()
+        if zwp:
+            try:
+                zextra["webhook_port"] = int(zwp)
+            except ValueError:
+                pass
+        zwpath = os.getenv("ZALO_WEBHOOK_PATH", "").strip()
+        if zwpath:
+            zextra["webhook_path"] = zwpath
+
     # Session settings
     idle_minutes = os.getenv("SESSION_IDLE_MINUTES")
     if idle_minutes:

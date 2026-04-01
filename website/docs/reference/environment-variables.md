@@ -213,6 +213,16 @@ For native Anthropic auth, Hermes prefers Claude Code's own credential files whe
 | `WECOM_WEBSOCKET_URL` | Custom WebSocket URL (default: `wss://openws.work.weixin.qq.com`) |
 | `WECOM_ALLOWED_USERS` | Comma-separated WeCom user IDs allowed to message the bot |
 | `WECOM_HOME_CHANNEL` | WeCom chat ID for cron delivery and notifications |
+| `ZALO_BOT_TOKEN` | Zalo Bot Platform token from Bot Creator ([bot.zapps.me](https://bot.zapps.me/docs/create-bot/)) |
+| `ZALO_ALLOWED_USERS` | Comma-separated Zalo user IDs allowed to message the bot |
+| `ZALO_ALLOW_ALL_USERS` | Allow all Zalo users (`true` / `1` / `yes`) — use with care |
+| `ZALO_HOME_CHANNEL` | Default Zalo chat id for cron / `send_message` home delivery |
+| `ZALO_CONNECTION_MODE` | `polling` (default, `getUpdates`) or `webhook` |
+| `ZALO_WEBHOOK_PUBLIC_URL` | Public `https://` URL passed to Zalo `setWebhook` |
+| `ZALO_WEBHOOK_SECRET` | 8–256 char secret; must match `X-Bot-Api-Secret-Token` on webhook POSTs |
+| `ZALO_WEBHOOK_HOST` | Bind host for local webhook HTTP server (default `0.0.0.0`) |
+| `ZALO_WEBHOOK_PORT` | Local webhook TCP port (default `8790`) |
+| `ZALO_WEBHOOK_PATH` | HTTP path for webhook POST (optional; else derived from public URL or `/zalo/webhook`) |
 | `MATTERMOST_URL` | Mattermost server URL (e.g. `https://mm.example.com`) |
 | `MATTERMOST_TOKEN` | Bot token or personal access token for Mattermost |
 | `MATTERMOST_ALLOWED_USERS` | Comma-separated Mattermost user IDs allowed to message the bot |

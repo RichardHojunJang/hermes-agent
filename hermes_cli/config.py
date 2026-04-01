@@ -40,6 +40,8 @@ _EXTRA_ENV_KEYS = frozenset({
     "WHATSAPP_MODE", "WHATSAPP_ENABLED",
     "MATTERMOST_HOME_CHANNEL", "MATTERMOST_REPLY_MODE",
     "MATRIX_PASSWORD", "MATRIX_ENCRYPTION", "MATRIX_HOME_ROOM",
+    "ZALO_CONNECTION_MODE", "ZALO_WEBHOOK_PUBLIC_URL", "ZALO_WEBHOOK_SECRET",
+    "ZALO_WEBHOOK_HOST", "ZALO_WEBHOOK_PORT", "ZALO_WEBHOOK_PATH",
 })
 
 import yaml
@@ -970,6 +972,54 @@ OPTIONAL_ENV_VARS = {
         "url": None,
         "password": False,
         "category": "messaging",
+    },
+    "ZALO_CONNECTION_MODE": {
+        "description": "Zalo Bot transport: polling (getUpdates, default) or webhook (HTTPS + aiohttp)",
+        "prompt": "Zalo mode: polling or webhook",
+        "url": "https://bot.zapps.me/docs/apis/getUpdates/",
+        "password": False,
+        "category": "messaging",
+        "advanced": True,
+    },
+    "ZALO_WEBHOOK_PUBLIC_URL": {
+        "description": "Public https URL registered with Zalo setWebhook (must match reverse-proxy path)",
+        "prompt": "Zalo webhook public URL (https://...)",
+        "url": "https://bot.zapps.me/docs/apis/setWebhook/",
+        "password": False,
+        "category": "messaging",
+        "advanced": True,
+    },
+    "ZALO_WEBHOOK_SECRET": {
+        "description": "Secret 8–256 chars; Zalo sends it as X-Bot-Api-Secret-Token on each webhook POST",
+        "prompt": "Zalo webhook secret token",
+        "url": "https://bot.zapps.me/docs/webhook/",
+        "password": True,
+        "category": "messaging",
+        "advanced": True,
+    },
+    "ZALO_WEBHOOK_HOST": {
+        "description": "Bind address for local Zalo webhook HTTP server (default 0.0.0.0)",
+        "prompt": "Zalo webhook bind host",
+        "url": None,
+        "password": False,
+        "category": "messaging",
+        "advanced": True,
+    },
+    "ZALO_WEBHOOK_PORT": {
+        "description": "TCP port for local Zalo webhook server (default 8790)",
+        "prompt": "Zalo webhook port",
+        "url": None,
+        "password": False,
+        "category": "messaging",
+        "advanced": True,
+    },
+    "ZALO_WEBHOOK_PATH": {
+        "description": "HTTP path for webhook POST (default: path from public URL, or /zalo/webhook if URL has no path)",
+        "prompt": "Zalo webhook path (optional)",
+        "url": None,
+        "password": False,
+        "category": "messaging",
+        "advanced": True,
     },
     "MATRIX_ALLOWED_USERS": {
         "description": "Comma-separated Matrix user IDs allowed to use the bot (@user:server format)",
