@@ -95,8 +95,9 @@ def adapter(monkeypatch):
     return adapter
 
 
-def make_message(*, channel, content: str, mentions=None):
-    author = SimpleNamespace(id=42, display_name="Jezza", name="Jezza")
+def make_message(*, channel, content: str, mentions=None, author=None):
+    if author is None:
+        author = SimpleNamespace(id=42, display_name="Jezza", name="Jezza")
     return SimpleNamespace(
         id=123,
         content=content,
@@ -294,16 +295,34 @@ async def test_discord_auto_thread_can_be_disabled(adapter, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_discord_bot_thread_skips_mention_requirement(adapter, monkeypatch):
-    """Messages in a thread the bot has participated in should not require @mention."""
+async def test_discord_bot_thread_requires_body_mention_for_peer_bot(adapter, monkeypatch):
+    """Peer bots must @ us in the body; thread participation does not waive that."""
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
     monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
     monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
 
-    # Simulate bot having previously participated in thread 456
     adapter._bot_participated_threads.add("456")
 
     thread = FakeThread(channel_id=456, name="existing thread")
+    peer = SimpleNamespace(id=77001, bot=True, display_name="PeerBot", name="PeerBot")
+    message = make_message(
+        channel=thread, content="follow-up without mention", author=peer
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discord_human_thread_skips_mention_requirement(adapter, monkeypatch):
+    """Humans in a thread the bot has participated in need not repeat @ every message."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    adapter._bot_participated_threads.add("458")
+    thread = FakeThread(channel_id=458, name="existing thread")
     message = make_message(channel=thread, content="follow-up without mention")
 
     await adapter._handle_message(message)
@@ -311,23 +330,85 @@ async def test_discord_bot_thread_skips_mention_requirement(adapter, monkeypatch
     adapter.handle_message.assert_awaited_once()
     event = adapter.handle_message.await_args.args[0]
     assert event.text == "follow-up without mention"
+
+
+@pytest.mark.asyncio
+async def test_discord_bot_thread_accepts_body_mention(adapter, monkeypatch):
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    adapter._bot_participated_threads.add("457")
+    thread = FakeThread(channel_id=457, name="existing thread")
+    bot = adapter._client.user
+    peer = SimpleNamespace(id=77002, bot=True, display_name="PeerBot", name="PeerBot")
+    message = make_message(
+        channel=thread,
+        content=f"<@{bot.id}> follow-up with mention",
+        author=peer,
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_awaited_once()
+    event = adapter.handle_message.await_args.args[0]
+    assert event.text == "follow-up with mention"
     assert event.source.chat_type == "thread"
 
 
 @pytest.mark.asyncio
 async def test_discord_unknown_thread_still_requires_mention(adapter, monkeypatch):
-    """Messages in a thread the bot hasn't participated in should still require @mention."""
+    """Unknown thread: humans still need the bot in message.mentions (or join a tracked thread)."""
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
     monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
     monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
 
-    # Bot has NOT participated in thread 789
     thread = FakeThread(channel_id=789, name="some thread")
     message = make_message(channel=thread, content="hello from unknown thread")
 
     await adapter._handle_message(message)
 
     adapter.handle_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discord_unknown_thread_accepts_body_mention(adapter, monkeypatch):
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    thread = FakeThread(channel_id=790, name="some thread")
+    bot = adapter._client.user
+    message = make_message(
+        channel=thread,
+        content=f"<@{bot.id}> hello from unknown thread",
+        mentions=[bot],
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_discord_strips_raw_at_id_mention(adapter, monkeypatch):
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+
+    bot = adapter._client.user
+    peer = SimpleNamespace(id=77003, bot=True, display_name="PeerBot", name="PeerBot")
+    message = make_message(
+        channel=FakeTextChannel(channel_id=321),
+        content=f"yo @{bot.id} there",
+        mentions=[],
+        author=peer,
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_awaited_once()
+    event = adapter.handle_message.await_args.args[0]
+    assert event.text == "yo  there"
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,30 @@ def _clean_discord_id(entry: str) -> str:
     return entry.strip()
 
 
+def _discord_body_mentions_user(content: Optional[str], user_id: int) -> bool:
+    """True if the message text explicitly @'s this user (not only API message.mentions).
+
+    Discord may add users to ``message.mentions`` for reply pings without a stable
+    match to \"user typed @ in the body\"; gate on raw text instead.
+
+    Recognizes ``<@id>``, ``<@!id>`` (nickname mention), and plain ``@id``.
+    """
+    if not content or user_id is None:
+        return False
+    sid = str(int(user_id))
+    return f"<@{sid}>" in content or f"<@!{sid}>" in content or f"@{sid}" in content
+
+
+def _is_peer_bot_author(message: Any, bot_user: Any) -> bool:
+    """True if the message is from a bot account other than our own."""
+    if bot_user is None:
+        return False
+    author = message.author
+    return bool(getattr(author, "bot", False)) and getattr(author, "id", None) != getattr(
+        bot_user, "id", None
+    )
+
+
 def check_discord_requirements() -> bool:
     """Check if Discord dependencies are available."""
     return DISCORD_AVAILABLE
@@ -585,7 +609,9 @@ class DiscordAdapter(BasePlatformAdapter):
                     if allow_bots == "none":
                         return
                     elif allow_bots == "mentions":
-                        if not self._client.user or self._client.user not in message.mentions:
+                        if not self._client.user or not _discord_body_mentions_user(
+                            message.content, self._client.user.id
+                        ):
                             return
                     # "all" falls through to handle_message
 
@@ -598,10 +624,15 @@ class DiscordAdapter(BasePlatformAdapter):
                     "DISCORD_IGNORE_NO_MENTION", "true"
                 ).lower() in ("true", "1", "yes")
                 if _ignore_no_mention and message.mentions and not isinstance(message.channel, discord.DMChannel):
-                    _bot_mentioned = (
-                        self._client.user is not None
-                        and self._client.user in message.mentions
-                    )
+                    if _is_peer_bot_author(message, self._client.user):
+                        _bot_mentioned = self._client.user is not None and _discord_body_mentions_user(
+                            message.content, self._client.user.id
+                        )
+                    else:
+                        _bot_mentioned = (
+                            self._client.user is not None
+                            and self._client.user in message.mentions
+                        )
                     if not _bot_mentioned:
                         return  # Talking to someone else, don't interrupt
 
@@ -2068,9 +2099,12 @@ class DiscordAdapter(BasePlatformAdapter):
 
     async def _handle_message(self, message: DiscordMessage) -> None:
         """Handle incoming Discord messages."""
-        # In server channels (not DMs), require the bot to be @mentioned
-        # UNLESS the channel is in the free-response list or the message is
-        # in a thread where the bot has already participated.
+        # In server channels (not DMs), when require_mention is on and the channel
+        # is not free-response:
+        #   • From another bot: require an explicit body @ (<@id>, <@!id>, or @id).
+        #     message.mentions alone is unreliable (reply pings).
+        #   • From a human: use message.mentions, with the usual bypass for threads
+        #     where the bot has already participated.
         #
         # Config (all settable via discord.* in config.yaml):
         #   discord.require_mention: Require @mention in server channels (default: true)
@@ -2094,17 +2128,30 @@ class DiscordAdapter(BasePlatformAdapter):
             require_mention = os.getenv("DISCORD_REQUIRE_MENTION", "true").lower() not in ("false", "0", "no")
             is_free_channel = bool(channel_ids & free_channels)
 
-            # Skip the mention check if the message is in a thread where
-            # the bot has previously participated (auto-created or replied in).
             in_bot_thread = is_thread and thread_id in self._bot_participated_threads
+            peer_bot = _is_peer_bot_author(message, self._client.user)
 
-            if require_mention and not is_free_channel and not in_bot_thread:
-                if self._client.user not in message.mentions:
+            if require_mention and not is_free_channel:
+                if not self._client.user:
                     return
+                if peer_bot:
+                    if not _discord_body_mentions_user(message.content, self._client.user.id):
+                        return
+                elif not in_bot_thread:
+                    if self._client.user not in message.mentions:
+                        return
 
-            if self._client.user and self._client.user in message.mentions:
-                message.content = message.content.replace(f"<@{self._client.user.id}>", "").strip()
-                message.content = message.content.replace(f"<@!{self._client.user.id}>", "").strip()
+            if self._client.user:
+                uid = self._client.user.id
+                strip = _discord_body_mentions_user(message.content, uid) or (
+                    not peer_bot and self._client.user in message.mentions
+                )
+                if strip:
+                    text = message.content or ""
+                    text = text.replace(f"<@{uid}>", "").strip()
+                    text = text.replace(f"<@!{uid}>", "").strip()
+                    text = text.replace(f"@{uid}", "").strip()
+                    message.content = text
 
         # Auto-thread: when enabled, automatically create a thread for every
         # @mention in a text channel so each conversation is isolated (like Slack).

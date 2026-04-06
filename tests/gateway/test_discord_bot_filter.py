@@ -5,6 +5,8 @@ import os
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from gateway.platforms.discord import _discord_body_mentions_user
+
 
 def _make_author(*, bot: bool = False, is_self: bool = False):
     """Create a mock Discord author."""
@@ -52,7 +54,9 @@ class TestDiscordBotFilter(unittest.TestCase):
             if allow == "none":
                 return False
             elif allow == "mentions":
-                if not client_user or client_user not in message.mentions:
+                if not client_user or not _discord_body_mentions_user(
+                    message.content, client_user.id
+                ):
                     return False
             # "all" falls through
         
@@ -85,17 +89,39 @@ class TestDiscordBotFilter(unittest.TestCase):
         self.assertTrue(self._run_filter(msg, "all"))
 
     def test_allow_bots_mentions_rejects_without_mention(self):
-        """With allow_bots=mentions, bot messages without @mention are rejected."""
+        """With allow_bots=mentions, bot messages without body @mention are rejected."""
         our_user = _make_author(is_self=True)
         bot = _make_author(bot=True)
-        msg = _make_message(author=bot, mentions=[])
+        msg = _make_message(author=bot, mentions=[], content="hi")
         self.assertFalse(self._run_filter(msg, "mentions", our_user))
 
-    def test_allow_bots_mentions_accepts_with_mention(self):
-        """With allow_bots=mentions, bot messages with @mention are accepted."""
+    def test_allow_bots_mentions_rejects_api_mention_only(self):
+        """API message.mentions without body text does not pass mentions mode."""
         our_user = _make_author(is_self=True)
         bot = _make_author(bot=True)
-        msg = _make_message(author=bot, mentions=[our_user])
+        msg = _make_message(author=bot, mentions=[our_user], content="reply ping only")
+        self.assertFalse(self._run_filter(msg, "mentions", our_user))
+
+    def test_allow_bots_mentions_accepts_with_body_mention(self):
+        """With allow_bots=mentions, bot messages with <@id> in content are accepted."""
+        our_user = _make_author(is_self=True)
+        bot = _make_author(bot=True)
+        msg = _make_message(
+            author=bot,
+            mentions=[our_user],
+            content=f"<@{our_user.id}> hello",
+        )
+        self.assertTrue(self._run_filter(msg, "mentions", our_user))
+
+    def test_allow_bots_mentions_accepts_raw_at_id(self):
+        """Plain @snowflake in body counts as a mention."""
+        our_user = _make_author(is_self=True)
+        bot = _make_author(bot=True)
+        msg = _make_message(
+            author=bot,
+            mentions=[],
+            content=f"hey @{our_user.id} there",
+        )
         self.assertTrue(self._run_filter(msg, "mentions", our_user))
 
     def test_default_is_none(self):
