@@ -57,6 +57,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("undo", "Remove the last user/assistant exchange", "Session"),
     CommandDef("title", "Set a title for the current session", "Session",
                args_hint="[name]"),
+    CommandDef("branch", "Branch the current session (explore a different path)", "Session",
+               aliases=("fork",), args_hint="[name]"),
     CommandDef("compress", "Manually compress conversation context", "Session"),
     CommandDef("rollback", "List or restore filesystem checkpoints", "Session",
                args_hint="[number]"),
@@ -82,6 +84,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     # Configuration
     CommandDef("config", "Show current configuration", "Configuration",
                cli_only=True),
+    CommandDef("model", "Switch model for this session", "Configuration", args_hint="[model] [--global]"),
     CommandDef("provider", "Show available providers and current provider",
                "Configuration"),
     CommandDef("prompt", "View/set custom system prompt", "Configuration",
@@ -414,6 +417,8 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
 
     Skills are the only tier that gets trimmed when the cap is hit.
     User-installed hub skills are excluded — accessible via /skills.
+    Skills disabled for the ``"telegram"`` platform (via ``hermes skills
+    config``) are excluded from the menu entirely.
 
     Returns:
         (menu_commands, hidden_count) where hidden_count is the number of
@@ -444,6 +449,17 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
     reserved_names.update(n for n, _ in plugin_entries)
     all_commands.extend(plugin_entries)
 
+    # Load per-platform disabled skills so they don't consume menu slots.
+    # get_skill_commands() already filters the *global* disabled list, but
+    # per-platform overrides (skills.platform_disabled.telegram) were never
+    # applied here — that's what this block fixes.
+    _platform_disabled: set[str] = set()
+    try:
+        from agent.skill_utils import get_disabled_skill_names
+        _platform_disabled = get_disabled_skill_names(platform="telegram")
+    except Exception:
+        pass
+
     # Remaining slots go to built-in skill commands (not hub-installed).
     skill_entries: list[tuple[str, str]] = []
     try:
@@ -458,6 +474,10 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
             if not skill_path.startswith(_skills_dir):
                 continue
             if skill_path.startswith(_hub_dir):
+                continue
+            # Skip skills disabled for telegram
+            skill_name = info.get("name", "")
+            if skill_name in _platform_disabled:
                 continue
             name = cmd_key.lstrip("/").replace("-", "_")
             desc = info.get("description", "")
@@ -725,6 +745,39 @@ class SlashCommandCompleter(Completer):
             )
             count += 1
 
+    def _model_completions(self, sub_text: str, sub_lower: str):
+        """Yield completions for /model from config aliases + built-in aliases."""
+        seen = set()
+        # Config-based direct aliases (preferred — include provider info)
+        try:
+            from hermes_cli.model_switch import (
+                _ensure_direct_aliases, DIRECT_ALIASES, MODEL_ALIASES,
+            )
+            _ensure_direct_aliases()
+            for name, da in DIRECT_ALIASES.items():
+                if name.startswith(sub_lower) and name != sub_lower:
+                    seen.add(name)
+                    yield Completion(
+                        name,
+                        start_position=-len(sub_text),
+                        display=name,
+                        display_meta=f"{da.model} ({da.provider})",
+                    )
+            # Built-in catalog aliases not already covered
+            for name in sorted(MODEL_ALIASES.keys()):
+                if name in seen:
+                    continue
+                if name.startswith(sub_lower) and name != sub_lower:
+                    identity = MODEL_ALIASES[name]
+                    yield Completion(
+                        name,
+                        start_position=-len(sub_text),
+                        display=name,
+                        display_meta=f"{identity.vendor}/{identity.family}",
+                    )
+        except Exception:
+            pass
+
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         if not text.startswith("/"):
@@ -745,6 +798,11 @@ class SlashCommandCompleter(Completer):
         if len(parts) > 1 or (len(parts) == 1 and text.endswith(" ")):
             sub_text = parts[1] if len(parts) > 1 else ""
             sub_lower = sub_text.lower()
+
+            # Dynamic model alias completions for /model
+            if " " not in sub_text and base_cmd == "/model":
+                yield from self._model_completions(sub_text, sub_lower)
+                return
 
             # Static subcommand completions
             if " " not in sub_text and base_cmd in SUBCOMMANDS:

