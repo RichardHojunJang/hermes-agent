@@ -578,15 +578,14 @@ class DiscordAdapter(BasePlatformAdapter):
 
                 # Bot message filtering (DISCORD_ALLOW_BOTS):
                 #   "none"     — ignore all other bots (default)
-                #   "mentions" — accept bot messages only when they @mention us
+                #   "mentions" — ignore all other bots (same as none for inbound). Reply pings
+                #                and @-chains still put users in message.mentions, so "only when
+                #                @us" cannot stop multi-bot ping-pong. Use "all" for bot↔bot.
                 #   "all"      — accept all bot messages
                 if getattr(message.author, "bot", False):
                     allow_bots = os.getenv("DISCORD_ALLOW_BOTS", "none").lower().strip()
-                    if allow_bots == "none":
+                    if allow_bots in ("none", "mentions"):
                         return
-                    elif allow_bots == "mentions":
-                        if not self._client.user or self._client.user not in message.mentions:
-                            return
                     # "all" falls through to handle_message
 
                 # If the message @mentions other users but NOT the bot, the
@@ -2072,6 +2071,9 @@ class DiscordAdapter(BasePlatformAdapter):
         # UNLESS the channel is in the free-response list or the message is
         # in a thread where the bot has already participated.
         #
+        # DISCORD_ALLOW_BOTS=mentions: in_bot_thread bypass applies to humans only; other bots
+        # are dropped in on_message and again below unless allow_bots=all.
+        #
         # Config (all settable via discord.* in config.yaml):
         #   discord.require_mention: Require @mention in server channels (default: true)
         #   discord.free_response_channels: Channel IDs where bot responds without mention
@@ -2101,6 +2103,18 @@ class DiscordAdapter(BasePlatformAdapter):
             if require_mention and not is_free_channel and not in_bot_thread:
                 if self._client.user not in message.mentions:
                     return
+
+            # Defense in depth: peer bots only when DISCORD_ALLOW_BOTS=all (see on_message).
+            allow_bots = os.getenv("DISCORD_ALLOW_BOTS", "none").lower().strip()
+            author = message.author
+            if (
+                allow_bots != "all"
+                and self._client
+                and self._client.user
+                and getattr(author, "bot", False)
+                and author.id != self._client.user.id
+            ):
+                return
 
             if self._client.user and self._client.user in message.mentions:
                 message.content = message.content.replace(f"<@{self._client.user.id}>", "").strip()

@@ -49,13 +49,10 @@ class TestDiscordBotFilter(unittest.TestCase):
 
         if getattr(message.author, "bot", False):
             allow = allow_bots.lower().strip()
-            if allow == "none":
+            if allow in ("none", "mentions"):
                 return False
-            elif allow == "mentions":
-                if not client_user or client_user not in message.mentions:
-                    return False
             # "all" falls through
-        
+
         return True  # message accepted
 
     def test_own_messages_always_ignored(self):
@@ -91,12 +88,12 @@ class TestDiscordBotFilter(unittest.TestCase):
         msg = _make_message(author=bot, mentions=[])
         self.assertFalse(self._run_filter(msg, "mentions", our_user))
 
-    def test_allow_bots_mentions_accepts_with_mention(self):
-        """With allow_bots=mentions, bot messages with @mention are accepted."""
+    def test_allow_bots_mentions_rejects_even_with_mention(self):
+        """mentions mode ignores peer bots even if they @ us (stops multi-bot ping-pong)."""
         our_user = _make_author(is_self=True)
         bot = _make_author(bot=True)
         msg = _make_message(author=bot, mentions=[our_user])
-        self.assertTrue(self._run_filter(msg, "mentions", our_user))
+        self.assertFalse(self._run_filter(msg, "mentions", our_user))
 
     def test_default_is_none(self):
         """Default behavior (no env var) should be 'none'."""

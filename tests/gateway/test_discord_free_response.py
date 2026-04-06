@@ -95,8 +95,9 @@ def adapter(monkeypatch):
     return adapter
 
 
-def make_message(*, channel, content: str, mentions=None):
-    author = SimpleNamespace(id=42, display_name="Jezza", name="Jezza")
+def make_message(*, channel, content: str, mentions=None, author=None):
+    if author is None:
+        author = SimpleNamespace(id=42, display_name="Jezza", name="Jezza")
     return SimpleNamespace(
         id=123,
         content=content,
@@ -358,3 +359,48 @@ async def test_discord_thread_participation_tracked_on_dispatch(adapter, monkeyp
     await adapter._handle_message(message)
 
     assert "777" in adapter._bot_participated_threads
+
+
+@pytest.mark.asyncio
+async def test_discord_allow_bots_mentions_peer_bot_without_mention_skipped_in_thread(
+    adapter, monkeypatch,
+):
+    """Peer bot in a participated thread must not bypass mentions mode without @hermes."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_ALLOW_BOTS", "mentions")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    adapter._bot_participated_threads.add("880")
+    thread = FakeThread(channel_id=880, name="t")
+    ext_bot = SimpleNamespace(id=77001, bot=True, display_name="PeerBot", name="PeerBot")
+    message = make_message(channel=thread, content="status update", mentions=[], author=ext_bot)
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_discord_allow_bots_mentions_peer_bot_with_mention_still_skipped(
+    adapter, monkeypatch,
+):
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_ALLOW_BOTS", "mentions")
+    monkeypatch.delenv("DISCORD_FREE_RESPONSE_CHANNELS", raising=False)
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    adapter._bot_participated_threads.add("881")
+    thread = FakeThread(channel_id=881, name="t")
+    our = adapter._client.user
+    ext_bot = SimpleNamespace(id=77002, bot=True, display_name="PeerBot", name="PeerBot")
+    message = make_message(
+        channel=thread,
+        content=f"<@{our.id}> ack",
+        mentions=[our],
+        author=ext_bot,
+    )
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_not_awaited()
