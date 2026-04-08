@@ -2516,6 +2516,20 @@ class AIAgent:
             except Exception:
                 pass
 
+        # Deep Memory — reasoning-based insights (optional, requires deep-memory package)
+        if any(t in self.valid_tool_names for t in ("recall", "learn", "entities")):
+            try:
+                from deep_memory.hermes_integration import build_deep_memory_context
+                # Use platform user ID or session metadata to find the right entity
+                _dm_entity = getattr(self, "_deep_memory_entity_id", None)
+                _dm_block = build_deep_memory_context(_dm_entity)
+                if _dm_block:
+                    prompt_parts.append(_dm_block)
+            except ImportError:
+                pass
+            except Exception as _dm_exc:
+                logger.debug("Deep memory context injection failed: %s", _dm_exc)
+
         has_skills_tools = any(name in self.valid_tool_names for name in ['skills_list', 'skill_view', 'skill_manage'])
         if has_skills_tools:
             avail_toolsets = {
@@ -8730,6 +8744,19 @@ class AIAgent:
             )
         except Exception as exc:
             logger.warning("on_session_end hook failed: %s", exc)
+
+        # Deep Memory — async post-session reasoning (fire-and-forget)
+        if any(t in self.valid_tool_names for t in ("recall", "learn", "entities")):
+            try:
+                from deep_memory.session_hook import process_session_async
+                process_session_async(
+                    session_id=self.session_id,
+                    messages=messages,
+                )
+            except ImportError:
+                pass
+            except Exception as _dm_exc:
+                logger.debug("Deep memory post-session reasoning failed: %s", _dm_exc)
 
         return result
 

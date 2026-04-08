@@ -159,6 +159,11 @@ def _discover_tools():
         # "tools.honcho_tools",  # Removed — Honcho is now a memory provider plugin
         "tools.homeassistant_tool",
     ]
+    # Deep Memory (external package — optional)
+    try:
+        import deep_memory.hermes_integration  # noqa: F401
+    except ImportError:
+        pass
     import importlib
     for mod_name in _modules:
         try:

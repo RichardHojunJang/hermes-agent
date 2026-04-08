@@ -50,6 +50,8 @@ _HERMES_CORE_TOOLS = [
     "text_to_speech",
     # Planning & memory
     "todo", "memory",
+    # Deep memory (reasoning-based insights — optional, requires deep-memory package)
+    "recall", "learn", "entities",
     # Session history search
     "session_search",
     # Clarifying questions
@@ -196,6 +198,12 @@ TOOLSETS = {
 
     # "honcho" toolset removed — Honcho is now a memory provider plugin.
     # Tools are injected via MemoryManager, not the toolset system.
+
+    "deep_memory": {
+        "description": "Reasoning-based memory with entity tracking and semantic recall",
+        "tools": ["recall", "learn", "entities"],
+        "includes": []
+    },
 
     "homeassistant": {
         "description": "Home Assistant smart home control and monitoring",
