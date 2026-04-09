@@ -48,6 +48,8 @@ _HERMES_CORE_TOOLS = [
     "text_to_speech",
     # Planning & memory
     "todo", "memory",
+    # Deep memory (reasoning-based insights — optional, requires deep-memory package)
+    "recall", "learn", "entities",
     # Session history search
     "session_search",
     # Clarifying questions
