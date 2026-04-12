@@ -11,14 +11,96 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import json
+import os
+
 from hermes_constants import get_hermes_home
-from tools.environments.base import (
-    BaseEnvironment,
-    _ThreadedProcessHandle,
-    _file_mtime_key,
-    _load_json_store,
-    _save_json_store,
-)
+
+try:
+    from tools.environments.base import (
+        BaseEnvironment,
+        _ThreadedProcessHandle,
+        _file_mtime_key,
+        _load_json_store,
+        _save_json_store,
+    )
+except ImportError:
+    # Mixed-version safety: during rolling/self updates a newer modal.py can be
+    # imported alongside an older base.py that does not yet expose the helper
+    # functions extracted in the unified execution refactor. Keep Modal importable
+    # by falling back to local compatibility shims instead of crashing tool init.
+    from tools.environments.base import BaseEnvironment
+
+    class _ThreadedProcessHandle:
+        def __init__(self, exec_fn, cancel_fn=None):
+            self._cancel_fn = cancel_fn
+            self._done = threading.Event()
+            self._returncode = None
+            self._error = None
+            read_fd, write_fd = os.pipe()
+            self._stdout = os.fdopen(read_fd, "r", encoding="utf-8", errors="replace")
+            self._write_fd = write_fd
+
+            def _worker():
+                try:
+                    output, exit_code = exec_fn()
+                    self._returncode = exit_code
+                    try:
+                        os.write(self._write_fd, output.encode("utf-8", errors="replace"))
+                    except OSError:
+                        pass
+                except Exception as exc:
+                    self._error = exc
+                    self._returncode = 1
+                finally:
+                    try:
+                        os.close(self._write_fd)
+                    except OSError:
+                        pass
+                    self._done.set()
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        @property
+        def stdout(self):
+            return self._stdout
+
+        @property
+        def returncode(self):
+            return self._returncode
+
+        def poll(self):
+            return self._returncode if self._done.is_set() else None
+
+        def kill(self):
+            if self._cancel_fn:
+                try:
+                    self._cancel_fn()
+                except Exception:
+                    pass
+
+        def wait(self, timeout=None):
+            self._done.wait(timeout=timeout)
+            return self._returncode
+
+    def _load_json_store(path: Path) -> dict:
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def _save_json_store(path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+
+    def _file_mtime_key(host_path: str):
+        try:
+            st = Path(host_path).stat()
+            return (st.st_mtime, st.st_size)
+        except OSError:
+            return None
 
 logger = logging.getLogger(__name__)
 

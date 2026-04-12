@@ -5,6 +5,7 @@ Supports configurable resource limits and optional filesystem persistence
 via writable overlay directories that survive across sessions.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -15,12 +16,52 @@ from pathlib import Path
 from typing import Optional
 
 from hermes_constants import get_hermes_home
-from tools.environments.base import (
-    BaseEnvironment,
-    _load_json_store,
-    _popen_bash,
-    _save_json_store,
-)
+
+try:
+    from tools.environments.base import (
+        BaseEnvironment,
+        _load_json_store,
+        _popen_bash,
+        _save_json_store,
+    )
+except ImportError:
+    # Mixed-version safety for rolling/self updates: older base.py revisions do
+    # not expose the extracted JSON/popen helpers yet. Fall back locally so the
+    # terminal tool can still import and answer simple requests instead of dying
+    # during backend module import.
+    from tools.environments.base import BaseEnvironment
+
+    def _load_json_store(path: Path) -> dict:
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def _save_json_store(path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+
+    def _popen_bash(cmd: list[str], stdin_data: str | None = None, **kwargs) -> subprocess.Popen:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+            text=True,
+            **kwargs,
+        )
+        if stdin_data is not None:
+            def _write():
+                try:
+                    proc.stdin.write(stdin_data)
+                    proc.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
+
+            threading.Thread(target=_write, daemon=True).start()
+        return proc
 
 logger = logging.getLogger(__name__)
 
