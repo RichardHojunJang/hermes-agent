@@ -6941,7 +6941,18 @@ class GatewayRunner:
                 return f"{disabled_note}\n\n{user_text}"
             return disabled_note
 
-        from tools.transcription_tools import transcribe_audio
+        try:
+            from tools.transcription_tools import transcribe_audio
+        except ModuleNotFoundError as e:
+            logger.error("Transcription module unavailable: %s", e)
+            unavailable_note = (
+                "[The user sent a voice message but transcription is unavailable on this Hermes "
+                "runtime right now — the speech-to-text module failed to load.]"
+            )
+            if user_text:
+                return f"{unavailable_note}\n\n{user_text}"
+            return unavailable_note
+
         import asyncio
 
         enriched_parts = []

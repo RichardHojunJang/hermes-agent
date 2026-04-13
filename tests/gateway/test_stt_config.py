@@ -74,6 +74,30 @@ async def test_enrich_message_with_transcription_avoids_bogus_no_provider_messag
 
 
 @pytest.mark.asyncio
+async def test_enrich_message_with_transcription_handles_missing_transcription_module_gracefully():
+    from gateway.run import GatewayRunner
+
+    runner = GatewayRunner.__new__(GatewayRunner)
+    runner.config = GatewayConfig(stt_enabled=True)
+
+    real_import = __import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "tools.transcription_tools":
+            raise ModuleNotFoundError("No module named 'tools.transcription_tools'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        result = await runner._enrich_message_with_transcription(
+            "caption",
+            ["/tmp/voice.ogg"],
+        )
+
+    assert "transcription is unavailable" in result.lower()
+    assert "caption" in result
+
+
+@pytest.mark.asyncio
 async def test_prepare_inbound_message_text_transcribes_queued_voice_event():
     from gateway.run import GatewayRunner
 

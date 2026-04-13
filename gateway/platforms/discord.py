@@ -1259,7 +1259,12 @@ class DiscordAdapter(BasePlatformAdapter):
         try:
             await asyncio.to_thread(VoiceReceiver.pcm_to_wav, pcm_data, wav_path)
 
-            from tools.transcription_tools import transcribe_audio
+            try:
+                from tools.transcription_tools import transcribe_audio
+            except ModuleNotFoundError as e:
+                logger.warning("Voice input transcription module unavailable: %s", e)
+                return
+
             result = await asyncio.to_thread(transcribe_audio, wav_path)
 
             if not result.get("success"):

@@ -1068,6 +1068,26 @@ class TestDiscordVoiceChannelMethods:
             await adapter._process_voice_input(111, 42, b"\x00" * 96000)
         # Should not raise
 
+    @pytest.mark.asyncio
+    async def test_process_voice_input_missing_transcription_module_is_ignored(self):
+        """Missing STT module should not crash Discord voice input."""
+        adapter = self._make_adapter()
+        callback = AsyncMock()
+        adapter._voice_input_callback = callback
+
+        real_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tools.transcription_tools":
+                raise ModuleNotFoundError("No module named 'tools.transcription_tools'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch("gateway.platforms.discord.VoiceReceiver.pcm_to_wav"), \
+             patch("builtins.__import__", side_effect=fake_import):
+            await adapter._process_voice_input(111, 42, b"\x00" * 96000)
+
+        callback.assert_not_called()
+
 
 # =====================================================================
 # stream_tts_to_speaker functional tests
