@@ -11,7 +11,23 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tools.credential_files import to_agent_visible_cache_path
 from tools.environments.file_sync import FileSyncManager, _FORCE_SYNC_ENV, iter_sync_files
+
+
+def test_ssh_agent_path_matches_file_sync_destination(tmp_path, monkeypatch):
+    hermes_home = tmp_path / "profiles" / "workbot"
+    doc_dir = hermes_home / "cache" / "documents"
+    doc_dir.mkdir(parents=True)
+    host_path = doc_dir / "report.pdf"
+    host_path.write_bytes(b"%PDF-1.7")
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("TERMINAL_ENV", "ssh")
+
+    sync_targets = dict(iter_sync_files("~/.hermes"))
+
+    assert str(host_path) in sync_targets
+    assert to_agent_visible_cache_path(str(host_path)) == sync_targets[str(host_path)]
 
 
 @pytest.fixture

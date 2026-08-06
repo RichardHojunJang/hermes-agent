@@ -16,6 +16,7 @@ from tools.credential_files import (
     map_cache_path_to_container,
     register_credential_file,
     register_credential_files,
+    to_agent_visible_cache_path,
 )
 
 
@@ -471,6 +472,22 @@ class TestToAgentVisiblePathPerBackend:
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         from tools.credential_files import to_agent_visible_cache_path
         assert to_agent_visible_cache_path("/etc/hosts") == "/etc/hosts"
+
+
+class TestToAgentVisibleCachePath:
+    def test_ssh_maps_profile_cache_to_remote_hermes_home(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / "profiles" / "workbot"
+        doc_dir = hermes_home / "cache" / "documents"
+        doc_dir.mkdir(parents=True)
+        host_path = doc_dir / "report.pdf"
+        host_path.write_bytes(b"%PDF-1.7")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "ssh")
+
+        assert (
+            to_agent_visible_cache_path(str(host_path))
+            == "~/.hermes/cache/documents/report.pdf"
+        )
 
 
 class TestIterCacheFiles:

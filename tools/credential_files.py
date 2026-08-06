@@ -496,7 +496,7 @@ def to_agent_visible_cache_path(
     host_path: str,
     container_base: str = "/root/.hermes",
 ) -> str:
-    """Translate a host cache path to its mounted path inside the sandbox.
+    """Translate a host cache path to the active backend's visible cache path.
 
     Returns the input unchanged if it is not under any auto-mounted cache
     directory, or if the active terminal backend does not require path
@@ -522,13 +522,13 @@ def to_agent_visible_cache_path(
     """
     backend = (os.environ.get("TERMINAL_ENV") or "local").strip().lower()
     if backend in ("docker", "modal"):
-        pass  # /root/.hermes default
+        target_base = container_base
     elif backend in ("ssh", "daytona", "vercel_sandbox"):
-        container_base = "~/.hermes"
+        target_base = "~/.hermes"
     else:
         return host_path  # local, singularity, unknown: host path is correct
 
-    mapped = map_cache_path_to_container(host_path, container_base=container_base)
+    mapped = map_cache_path_to_container(host_path, container_base=target_base)
     return mapped if mapped is not None else host_path
 
 
