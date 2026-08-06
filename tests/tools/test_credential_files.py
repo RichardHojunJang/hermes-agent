@@ -475,6 +475,37 @@ class TestToAgentVisiblePathPerBackend:
 
 
 class TestToAgentVisibleCachePath:
+    def test_local_backend_keeps_host_path(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        doc_dir = hermes_home / "cache" / "documents"
+        doc_dir.mkdir(parents=True)
+        host_path = doc_dir / "report.pdf"
+        host_path.write_bytes(b"%PDF-1.7")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+
+        assert to_agent_visible_cache_path(str(host_path)) == str(host_path)
+
+    @pytest.mark.parametrize(
+        ("container_base", "expected"),
+        [
+            ("/root/.hermes", "/root/.hermes/cache/documents/report.pdf"),
+            ("/custom/.hermes", "/custom/.hermes/cache/documents/report.pdf"),
+        ],
+    )
+    def test_docker_backend_preserves_default_and_custom_bases(
+        self, tmp_path, monkeypatch, container_base, expected
+    ):
+        hermes_home = tmp_path / ".hermes"
+        doc_dir = hermes_home / "cache" / "documents"
+        doc_dir.mkdir(parents=True)
+        host_path = doc_dir / "report.pdf"
+        host_path.write_bytes(b"%PDF-1.7")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("TERMINAL_ENV", "docker")
+
+        assert to_agent_visible_cache_path(str(host_path), container_base) == expected
+
     def test_ssh_maps_profile_cache_to_remote_hermes_home(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "profiles" / "workbot"
         doc_dir = hermes_home / "cache" / "documents"
