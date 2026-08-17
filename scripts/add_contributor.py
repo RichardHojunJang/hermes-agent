@@ -17,12 +17,41 @@ legacy AUTHOR_MAP), refuses with exit 1 so a typo can't silently reassign
 someone's commits.
 """
 
+import json
 import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EMAILS_DIR = REPO_ROOT / "contributors" / "emails"
+EMAIL_OVERRIDES_FILE = REPO_ROOT / "contributors" / "email_overrides.json"
+
+
+def read_override_map(path: Path | None = None) -> dict[str, str]:
+    path = path or EMAIL_OVERRIDES_FILE
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def write_override_map(mapping: dict[str, str], path: Path | None = None) -> None:
+    path = path or EMAIL_OVERRIDES_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def casefold_conflict(email: str) -> Path | None:
+    if not EMAILS_DIR.is_dir():
+        return None
+    return next(
+        (path for path in EMAILS_DIR.iterdir()
+         if path.is_file() and path.name != email and path.name.casefold() == email.casefold()),
+        None,
+    )
 
 _EMAIL_RE = re.compile(r"^[^/\\\s]+@[^/\\\s]+$")
 # GitHub's *current* signup rules forbid consecutive hyphens, but legacy
@@ -65,6 +94,28 @@ def add_contributor(email: str, login: str, comment: str = "") -> int:
     if not _LOGIN_RE.match(login):
         print(f"error: {login!r} is not a valid GitHub login", file=sys.stderr)
         return 2
+
+    overrides = read_override_map()
+    existing = overrides.get(email)
+    if existing is not None:
+        if existing == login:
+            print("present")
+            return 0
+        print(
+            f"error: {email} already maps to {existing!r} (asked for {login!r}) — "
+            "resolve manually",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check this before direct filename lookup: case-insensitive filesystems
+    # may report a different-cased mapping as ``EMAILS_DIR / email`` itself.
+    conflict = casefold_conflict(email)
+    if conflict is not None:
+        overrides[email] = login
+        write_override_map(overrides)
+        print(f"added casefold-safe override: {email} -> {login}")
+        return 0
 
     path = EMAILS_DIR / email
     existing = read_mapping_file(path) if path.is_file() else None

@@ -2077,6 +2077,28 @@ LEGACY_AUTHOR_MAP = {
 # Directory-based mappings: contributors/emails/<email> → login
 # ──────────────────────────────────────────────────────────────────────
 CONTRIBUTORS_EMAILS_DIR = REPO_ROOT / "contributors" / "emails"
+CONTRIBUTORS_EMAIL_OVERRIDES_FILE = REPO_ROOT / "contributors" / "email_overrides.json"
+
+
+def _load_contributor_overrides(path: "Path | None" = None) -> dict:
+    """Load explicit email mappings that cannot safely use a filename.
+
+    Most mappings remain one-file-per-email under contributors/emails. This
+    JSON escape hatch preserves exact email case when two valid emails differ
+    only by case and therefore collide on case-insensitive filesystems.
+    """
+    path = path or CONTRIBUTORS_EMAIL_OVERRIDES_FILE
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        email: login.lstrip("@")
+        for email, login in raw.items()
+        if isinstance(email, str) and isinstance(login, str) and login.strip()
+    }
 
 
 def _load_contributor_dir(directory: "Path | None" = None) -> dict:
@@ -2105,7 +2127,7 @@ def _load_contributor_dir(directory: "Path | None" = None) -> dict:
 
 
 # Effective map: frozen legacy dict + directory entries (directory wins).
-AUTHOR_MAP = {**LEGACY_AUTHOR_MAP, **_load_contributor_dir()}
+AUTHOR_MAP = {**LEGACY_AUTHOR_MAP, **_load_contributor_dir(), **_load_contributor_overrides()}
 
 
 def git(*args, cwd=None):

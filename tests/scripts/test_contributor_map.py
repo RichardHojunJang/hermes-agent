@@ -116,3 +116,60 @@ def test_cli_entrypoint_end_to_end(tmp_path):
     assert proc.returncode == 0, proc.stderr
     out = (tmp_path / "contributors" / "emails" / "cli@example.com").read_text(encoding="utf-8")
     assert out.splitlines()[0] == "cliperson"
+
+
+
+def test_casefold_conflicting_email_uses_override_map(emails_dir, tmp_path, monkeypatch):
+    """A case-only email variant must not create an unrepresentable filename."""
+    import json
+    import add_contributor
+
+    overrides = tmp_path / "contributors" / "email_overrides.json"
+    monkeypatch.setattr(add_contributor, "EMAIL_OVERRIDES_FILE", overrides)
+    emails_dir.mkdir(parents=True)
+    (emails_dir / "agent@agents-Mac-mini.local").write_text("momomojo\n")
+
+    assert add_contributor.add_contributor("agent@Agents-Mac-mini.local", "skip-agent") == 0
+    assert not (emails_dir / "agent@Agents-Mac-mini.local").exists()
+    assert json.loads(overrides.read_text(encoding="utf-8")) == {
+        "agent@Agents-Mac-mini.local": "skip-agent"
+    }
+
+
+def test_release_loader_reads_casefold_safe_override_map(tmp_path):
+    import json
+
+    overrides = tmp_path / "email_overrides.json"
+    overrides.write_text(json.dumps({"agent@Agents-Mac-mini.local": "skip-agent"}))
+
+    assert release._load_contributor_overrides(overrides) == {
+        "agent@Agents-Mac-mini.local": "skip-agent"
+    }
+
+
+
+def test_casefold_conflict_precedes_case_insensitive_direct_lookup(
+    emails_dir, tmp_path, monkeypatch
+):
+    """Simulate macOS resolving the case-variant path as an existing file."""
+    import add_contributor
+
+    overrides = tmp_path / "contributors" / "email_overrides.json"
+    lower = emails_dir / "agent@agents-Mac-mini.local"
+    target = emails_dir / "agent@Agents-Mac-mini.local"
+    emails_dir.mkdir(parents=True)
+    lower.write_text("momomojo\n")
+    original_is_file = Path.is_file
+    monkeypatch.setattr(add_contributor, "EMAIL_OVERRIDES_FILE", overrides)
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda self: True if self == target else original_is_file(self),
+    )
+    monkeypatch.setattr(
+        add_contributor,
+        "read_mapping_file",
+        lambda path: "momomojo" if path == target else None,
+    )
+
+    assert add_contributor.add_contributor("agent@Agents-Mac-mini.local", "skip-agent") == 0
