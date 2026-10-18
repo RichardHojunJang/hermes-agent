@@ -90,6 +90,15 @@ def carry_callback(event, rewritten):
             bound_var.set((bound[0], rewritten, *bound[2:]))
 
 
+def _require_standalone_launch_hint(profile, home, hint):
+    from hermes_constants import get_routing_process_hermes_home
+    from gateway.session_authorities import served_profile_name
+    launch = get_routing_process_hermes_home().resolve()
+    # A self-label is metadata, not permission to select another callback or home.
+    if profile is not None or home != launch or hint != served_profile_name(launch):
+        raise RuntimeStoreError('profile_mismatch')
+
+
 def _binding(runner, source, profile):
     registries = [(None, runner.adapters), *getattr(runner, '_profile_adapters', {}).items()]
     from gateway.config import Platform
@@ -105,7 +114,7 @@ def _binding(runner, source, profile):
     runtime_home = home
     multiplex = getattr(runner.config, 'multiplex_profiles', False)
     if not multiplex and source.profile:
-        raise RuntimeStoreError('profile_mismatch')
+        _require_standalone_launch_hint(profile, home, source.profile)
     if multiplex:
         # Only the reservation-backed server registry proves a served home. Directory
         # discovery and _resolve_profile_home_for_source's primary fallback do not.
