@@ -164,6 +164,7 @@ TOOLSETS = {
     "discord": _ts("Discord read and participate tools (fetch messages, search members, create threads)", ["discord"]),
     "discord_admin": _ts("Discord server management (list channels/roles, pin messages, assign roles)", ["discord_admin"]),
     "yuanbao": _ts("Yuanbao platform tools - group info, member queries, DM, stickers", _YUANBAO_TOOLS),
+    "slack": _ts("Slack thread tools (fetch a file attached earlier in the current thread, on demand)", ["slack_thread_file"]),
     "feishu_doc": _ts("Read Feishu/Lark document content", ["feishu_doc_read"]),
     "feishu_drive": _ts("Feishu/Lark document comment operations (list, reply, add)", _FEISHU_TOOLS[1:]),
 
@@ -207,7 +208,10 @@ TOOLSETS = {
         ["discord", "discord_admin"],
     ),
     "hermes-whatsapp": _bundle("WhatsApp bot toolset - similar to Telegram (personal messaging, more trusted)"),
-    "hermes-slack": _bundle("Slack bot toolset - full access for workspace use (terminal has safety checks)"),
+    "hermes-slack": _bundle(
+        "Slack bot toolset - full access for workspace use (terminal has safety checks)",
+        ["slack_thread_file"],
+    ),
     "hermes-signal": _bundle("Signal bot toolset - encrypted messaging platform (full access)"),
     "hermes-bluebubbles": _bundle("BlueBubbles iMessage bot toolset - Apple iMessage via local BlueBubbles server"),
     "hermes-email": _bundle("Email bot toolset - interact with Hermes via email (IMAP/SMTP)"),

@@ -147,20 +147,37 @@ def _slack_response_payload(response: Any) -> dict[str, Any]:
 _SLACK_SPECIAL_MENTION_RE = re.compile(r"<!(?:everyone|channel|here)(?:\|[^>\n]*)?>", re.IGNORECASE)
 
 # Thread-root images delivered on a mid-thread cold start; other messages' files
-# are text markers only (the root is usually the artifact the mention is about).
+# are text markers only (the root is usually the artifact the mention is about) that carry
+# the file ID, so the agent can fetch one it needs with ``slack_thread_file``.
 _THREAD_ROOT_IMAGE_MAX = 4
+
+
+# A whole Slack file ID (``F`` + uppercase alphanumerics, anchored). Only a well-formed ID is
+# echoed into context markers, so a crafted ``id`` field can't inject text; ``slack_thread_file``
+# validates the same shape. (Distinct name: a forked resolver may define its own unanchored
+# file-ID search pattern, and a same-named module constant would silently shadow this one.)
+_SLACK_EXACT_FILE_ID_RE = re.compile(r"^F[A-Z0-9]{6,20}$")
+
+# ``slack_thread_file`` scans at most this many thread messages for the requested file, and
+# downloads at most this many bytes (Slack's bot upload cap, same as the inbound document cap).
+_THREAD_FILE_SCAN_MAX_MESSAGES = 1000
+_THREAD_FILE_MAX_BYTES = 20 * 1024 * 1024
 
 
 def _slack_file_marker(file_obj: dict[str, Any]) -> str:
     """Render a compact text marker for a Slack file so text-only context shows attachments. Name is
-    sanitized (newlines/brackets stripped) so a hostile filename can't fake context structure."""
+    sanitized (newlines/brackets stripped) so a hostile filename can't fake context structure. A
+    well-formed file ID is appended (``file_id=F…``) so the agent can fetch a file it needs with the
+    ``slack_thread_file`` tool instead of every earlier attachment being downloaded up front."""
     name = str(file_obj.get("name") or file_obj.get("title") or file_obj.get("id") or "file")
     name = re.sub(r"[\r\n\[\]]+", " ", name).strip() or "file"
     mimetype = str(file_obj.get("mimetype") or "")
+    file_id = str(file_obj.get("id") or "")
+    id_suffix = f", file_id={file_id}" if _SLACK_EXACT_FILE_ID_RE.match(file_id) else ""
     for kind in ("image", "video", "audio"):
         if mimetype.startswith(kind + "/"):
-            return f"[{kind}: {name}]"
-    return f"[file: {name} ({mimetype})]" if mimetype else f"[file: {name}]"
+            return f"[{kind}: {name}{id_suffix}]"
+    return f"[file: {name} ({mimetype}){id_suffix}]" if mimetype else f"[file: {name}{id_suffix}]"
 
 
 # GFM tables: Slack mrkdwn shows pipe tables as literal pipes, so they are wrapped in ```
@@ -5862,13 +5879,15 @@ class SlackAdapter(BasePlatformAdapter):
         return next((m for m in messages if m.get("ts", "") == thread_ts), None)
 
     async def _conversations_replies_with_backoff(
-        self, channel_id: str, thread_ts: str, limit: int, team_id: str) -> Any:
-        """``conversations.replies`` with 1s/2s backoff on Tier-3 rate limits (429)."""
+        self, channel_id: str, thread_ts: str, limit: int, team_id: str, cursor: str = "") -> Any:
+        """``conversations.replies`` with 1s/2s backoff on Tier-3 rate limits (429); ``cursor``
+        continues a paginated read."""
         client = self._get_client(channel_id, team_id=team_id)
+        page = {"cursor": cursor} if cursor else {}
         for attempt in range(3):
             try:
                 return await client.conversations_replies(
-                    channel=channel_id, ts=thread_ts, limit=limit, inclusive=True)
+                    channel=channel_id, ts=thread_ts, limit=limit, inclusive=True, **page)
             except Exception as exc:
                 err_str = str(exc).lower()
                 is_rate_limit = (
@@ -6045,6 +6064,100 @@ class SlackAdapter(BasePlatformAdapter):
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("[Slack] Thread-root image recovery failed: %s", exc)
         return media_urls, media_types
+
+    async def _find_thread_file(
+        self, channel_id: str, thread_ts: str, file_id: str, team_id: str
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+        """``(message, file)`` for the message in this exact thread that carries ``file_id``, else
+        ``(None, None)``. Reads ``conversations.replies`` fresh (paginated, bounded by
+        ``_THREAD_FILE_SCAN_MAX_MESSAGES``) so a file ID from any other thread or channel never matches."""
+        cursor, scanned = "", 0
+        while scanned < _THREAD_FILE_SCAN_MAX_MESSAGES:
+            result = await self._conversations_replies_with_backoff(
+                channel_id, thread_ts, 200, team_id, cursor=cursor)
+            payload = _slack_response_payload(result)
+            messages = payload.get("messages") or []
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                # conversations.replies returns the root plus its replies; anything else is not this thread.
+                if msg.get("ts") != thread_ts and msg.get("thread_ts") != thread_ts:
+                    continue
+                for f in msg.get("files") or []:
+                    if isinstance(f, dict) and f.get("id") == file_id:
+                        return msg, f
+            scanned += len(messages)
+            cursor = str(((payload.get("response_metadata") or {}).get("next_cursor")) or "")
+            if not messages or not cursor or not payload.get("has_more", True):
+                break
+        return None, None
+
+    async def fetch_thread_file(self, channel_id: str, thread_ts: str, file_id: str) -> dict[str, Any]:
+        """Download one file attached to a message in this thread, on demand (``slack_thread_file``).
+
+        Thread context renders earlier attachments as ``[file: name (type), file_id=F…]`` markers only;
+        this lets the agent pull just the file it needs (#134486). Gates, in order:
+
+        * ``file_id`` must be a well-formed Slack file ID;
+        * the file must be attached to a message in ``conversations.replies`` for exactly
+          ``channel_id``/``thread_ts`` (the caller passes the session's own chat/thread, never model input);
+        * that message must be this bot's own post, or come from a sender the gateway allowlist authorizes
+          (``_is_sender_authorized(...) is True``); other bots and unverified users are refused;
+        * the size must be known and within ``_THREAD_FILE_MAX_BYTES``.
+
+        The download reuses the inbound path (workspace-scoped token, cache). Returns
+        ``{"success": True, "path": <gateway cache path>, ...}`` or ``{"error": ...}``."""
+        file_id = str(file_id or "").strip()
+        if not _SLACK_EXACT_FILE_ID_RE.match(file_id):
+            return {"error": "file_id must be a Slack file ID such as F0123ABCDEF (shown as file_id=… in thread context)."}
+        if not channel_id or not thread_ts:
+            return {"error": "slack_thread_file only works inside a Slack thread."}
+        team_id = self.scope_id_for_chat(channel_id) or ""
+        try:
+            msg, f = await self._find_thread_file(channel_id, thread_ts, file_id, team_id)
+        except Exception as exc:
+            detail = self._describe_slack_api_error(getattr(exc, "response", None))
+            logger.warning("[Slack] slack_thread_file: reading thread %s/%s failed: %s", channel_id, thread_ts, exc)
+            return {"error": f"Could not read this thread from Slack: {detail or type(exc).__name__}"}
+        if msg is None or f is None:
+            return {"error": f"File {file_id} is not attached to any message in this thread. Only files posted in the current thread can be fetched."}
+        bot_uid = (self._team_bot_user_ids.get(team_id) if team_id else None) or self._bot_user_id
+        sender = str(msg.get("user") or "")
+        if self._event_declares_bot_sender(msg):
+            if not (bot_uid and sender == bot_uid):
+                return {"error": f"File {file_id} was posted by another bot; only files from allowed users or from you can be fetched."}
+        elif self._is_sender_authorized(sender, chat_type="thread", chat_id=channel_id) is not True:
+            return {"error": f"File {file_id} was posted by someone who is not on this bot's allowlist, so it is not fetched. Ask an allowed user to share it."}
+        # Slack Connect stubs carry no URL fields until files.info.
+        if f.get("file_access") == "check_file_info":
+            notices: list[str] = []
+            f = await self._resolve_file_stub(f, channel_id, team_id, notices)
+            if f is None or f.get("id") != file_id:
+                return {"error": "; ".join(notices) or f"Slack did not return file {file_id}."}
+        size = f.get("size") or 0
+        if not isinstance(size, int) or size <= 0 or size > _THREAD_FILE_MAX_BYTES:
+            return {"error": f"File {file_id} is too large or has an unknown size (limit {_THREAD_FILE_MAX_BYTES // (1024 * 1024)} MB)."}
+        mimetype = str(f.get("mimetype") or "application/octet-stream")
+        url = f.get("url_private_download") or f.get("url_private") or ""
+        if not url:
+            return {"error": f"Slack returned no download URL for file {file_id}."}
+        kind = self._slack_file_kind(f, mimetype)
+        try:
+            cached = await self._cache_slack_file(kind, f, url, mimetype, team_id)
+        except Exception as exc:
+            detail = self._describe_slack_download_failure(exc, file_obj=f)
+            logger.warning("[Slack] slack_thread_file: download of %s failed: %s", file_id, exc)
+            return {"error": detail or f"Downloading file {file_id} failed: {type(exc).__name__}"}
+        if cached is None:
+            return {"error": f"File {file_id} could not be cached (too large or unknown size)."}
+        cached_path, media_type, _ = cached
+        logger.info("[Slack] slack_thread_file: fetched %s (%s, %d bytes) from %s/%s",
+                    file_id, media_type, size, channel_id, thread_ts)
+        return {
+            "success": True, "file_id": file_id, "name": str(f.get("name") or f.get("title") or file_id),
+            "mimetype": media_type, "size": size, "kind": kind, "path": cached_path,
+            "posted_by": sender, "message_ts": str(msg.get("ts") or ""),
+        }
 
     def _slash_channel_gated(self, channel_id: str) -> bool:
         """The message path's channel gates (_prefilter_inbound, _channel_gate_allows) for a slash

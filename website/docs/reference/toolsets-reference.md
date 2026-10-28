@@ -78,6 +78,7 @@ Or in-session:
 | `search` | `web_search` | Web search only (without extract). |
 | `session_search` | `session_search` | Search past conversation sessions. |
 | `skills` | `skill_manage`, `skill_view`, `skills_list` | Skill CRUD and browsing. |
+| `slack` | `slack_thread_file` | Fetch, on demand, a file attached to an earlier message in the current Slack thread (thread context shows it as `[file: name (type), file_id=F…]`). Gateway-only; active on the `hermes-slack` toolset. Only files in the session's own thread posted by an allowlisted user or by the bot itself are downloaded (20 MB cap). |
 | `terminal` | `process_manage`, `terminal` | Shell command execution and background process management. |
 | `todo` | `todo_list` | Task list management within a session. |
 | `tts` | `text_to_speech` | Text-to-speech audio generation. |
@@ -99,7 +100,7 @@ Platform toolsets define the complete tool configuration for a deployment target
 | `hermes-cron` | Same as `hermes-cli`. |
 | `hermes-telegram` | Same as `hermes-cli`. |
 | `hermes-discord` | Adds `discord` and `discord_admin` on top of `hermes-cli`. |
-| `hermes-slack` | Same as `hermes-cli`. |
+| `hermes-slack` | Adds `slack_thread_file` on top of `hermes-cli`. |
 | `hermes-whatsapp` | Same as `hermes-cli`. |
 | `hermes-signal` | Same as `hermes-cli`. |
 | `hermes-matrix` | Same as `hermes-cli`. |

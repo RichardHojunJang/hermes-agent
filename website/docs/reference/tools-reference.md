@@ -287,6 +287,14 @@ to use. Like every schema change, that lands on the next session — a running
 conversation keeps the toolset it started with, and the app declines the call in
 the meantime.
 
+## `slack` toolset
+
+Registered on the `hermes-slack` platform toolset (gateway only). Uses the Slack adapter's own bot token; the token never reaches the terminal backend.
+
+| Tool | Description | Requires environment |
+|------|-------------|----------------------|
+| `slack_thread_file` | Download one file that was attached to an earlier message in the current Slack thread, by the `file_id` shown in the thread-context marker (`[file: report.pdf (application/pdf), file_id=F…]`). Returns a `path` the terminal backend can open (synced for SSH/remote backends). Refuses files outside the session's thread, files posted by non-allowlisted users or other bots, and files over 20 MB. | Slack gateway session |
+
 ## `todo` toolset
 
 | Tool | Description | Requires environment |

@@ -383,6 +383,10 @@ Understanding how Hermes behaves in different contexts:
 
 :::tip
 In channels, always @mention the bot to start a conversation. Once the bot is active in a thread, you can reply in that thread without mentioning it. Outside of threads, messages without @mention are ignored to prevent noise in busy channels.
+
+#### Files posted earlier in a thread
+
+Files attached to the message that mentions the bot are downloaded with that turn. Files on *earlier* thread messages (for example a PDF a colleague posted before someone asked the bot about it) are not downloaded up front: the thread context shows them as markers such as `[file: plan.pdf (application/pdf), file_id=F0123ABCDEF]`, and the agent fetches only the ones it needs with the `slack_thread_file` tool. The tool is limited to the current thread, to files posted by allowlisted users or by the bot itself, and to 20 MB per file; anything else stays a marker, and the agent will ask for the file to be re-shared.
 :::
 
 ---
